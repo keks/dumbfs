@@ -1,10 +1,33 @@
 package rwablk
 
 import (
+	"encoding/binary"
 	"io"
 
 	"github.com/keks/dumbfs"
 )
+
+const BlockHeaderSize = 4
+
+// TODO: maybe export block?
+
+func openBlock(rwa dumbfs.ReadWriterAt, off int64) (*block, error) {
+	blk := &block{
+		lower: rwa,
+		off: off,
+	}
+
+	return blk, blk.parse()
+}
+func newBlock(rwa dumbfs.ReadWriterAt, off int64, size int) (*block, error) {
+	blk := &block{
+		lower: rwa,
+		off: off,
+		size: size,
+	}
+
+	return blk, blk.format()
+}
 
 type block struct {
 	off  int64
@@ -65,4 +88,31 @@ func (blk *block) WriteAt(data []byte, off int64) (int, error) {
 	}
 
 	return n, nil
+}
+
+func (blk *block) parse() error {
+	buf := make([]byte, BlockHeaderSize)
+	_, err := blk.lower.ReadAt(buf, blk.off)
+	if err != nil {
+		return err
+	}
+
+	blk.size = int(binary.LittleEndian.Uint32(buf)) - BlockHeaderSize
+	blk.off += BlockHeaderSize
+
+	return nil
+}
+
+func (blk *block) format() error {
+	size := make([]byte, BlockHeaderSize)
+	binary.LittleEndian.PutUint32(size, uint32(blk.size))
+	_, err := blk.lower.WriteAt(size, blk.off)
+	if err != nil {
+		return err
+	}
+
+	blk.size -= BlockHeaderSize
+	blk.off += BlockHeaderSize
+
+	return nil
 }

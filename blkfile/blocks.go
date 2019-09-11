@@ -7,7 +7,6 @@ import (
 	"github.com/keks/dumbfs"
 )
 
-// TODO: keep track of opened blocks
 // TODO: variable block sizes
 
 type Blocks struct {

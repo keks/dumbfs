@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/keks/dumbfs"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,20 +52,80 @@ func (rwa *testReadWriterAt) WriteAt(data []byte, off int64) (int, error) {
 }
 
 type op interface {
-	Do(*testing.T, *block)
+	Do(*testing.T, dumbfs.ReadWriterAt)
 }
 
+type blkOpenOp struct {
+	blk *block
+	id dumbfs.BlockID
+
+	expErr string
+}
+
+func (op blkOpenOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
+	blk, err := openBlock(rwa, int64(op.id))
+	if op.expErr == "" {
+		require.NoError(t, err)
+	} else {
+		require.EqualError(t, err, op.expErr)
+	}
+
+	*op.blk = *blk
+}
+
+type blkNewOp struct {
+	blk *block
+	size int
+	id dumbfs.BlockID
+
+	expErr string
+}
+
+func (op blkNewOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
+	blk, err := newBlock(rwa, int64(op.id), op.size)
+	if op.expErr == "" {
+		require.NoError(t, err)
+	} else {
+		require.EqualError(t, err, op.expErr)
+	}
+
+	*op.blk = *blk
+}
+
+
+
+
 type blkWriteOp struct {
+	blk *block
 	data []byte
 	off  int64
+
+	// set these if blk == nil
+	blkOff int64
+	blkSize int
 
 	expN   int
 	expErr string
 }
 
-func (op blkWriteOp) Do(t *testing.T, blk *block) {
+func (op blkWriteOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
 	r := require.New(t)
-	n, err := blk.WriteAt(op.data, op.off)
+
+	t.Log("writeOp, op.blk:", op.blk)
+
+	if op.blk == nil {
+		op.blk = &block{
+			lower: rwa,
+			off:   op.blkOff,
+			size:  op.blkSize,
+		}
+	}
+
+	t.Log("writeOp, op.blk:", op.blk)
+
+	n, err := op.blk.WriteAt(op.data, op.off)
+
+	t.Logf("writeOp, n: %d, err: %v", n, err)
 
 	r.Equal(op.expN, n)
 	if op.expErr == "" {
@@ -74,22 +136,42 @@ func (op blkWriteOp) Do(t *testing.T, blk *block) {
 }
 
 type blkReadOp struct {
+	blk  *block
 	off int64
 	readlen int
+
+	// set these if blk == nil
+	blkOff int64
+	blkSize int
 
 	exp    []byte
 	expN   int
 	expErr string
 }
 
-func (op blkReadOp) Do(t *testing.T, blk *block) {
+func (op blkReadOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
 	r := require.New(t)
 	if op.readlen == 0 {
 		op.readlen = len(op.exp)
 	}
 
+	t.Log("readOp, op.blk:", op.blk)
+
+	if op.blk == nil {
+		op.blk = &block{
+			lower: rwa,
+			off:   op.blkOff,
+			size:  op.blkSize,
+		}
+	}
+
+	t.Log("readOp, op.blk:", op.blk)
+	t.Logf("readOp, op.blk.lower:%#v", op.blk.lower)
+
 	buf := make([]byte, op.readlen)
-	n, err := blk.ReadAt(buf, op.off)
+	n, err := op.blk.ReadAt(buf, op.off)
+
+	t.Logf("readOp, n: %d, err: %v", n, err)
 
 	if op.expErr == "" {
 		r.NoError(err)
@@ -109,29 +191,24 @@ func TestBlock(t *testing.T) {
 
 	mktest := func(tc testcase) func(*testing.T) {
 		return func(t *testing.T) {
-			blk := &block{
-				lower: &testReadWriterAt{[]byte{}},
-				size:  tc.size,
-			}
-
+			// test with memory ReadWriterAt
+			rwa := &testReadWriterAt{[]byte{}}
 			for _, op := range tc.ops {
-				op.Do(t, blk)
+				op.Do(t, rwa)
 			}
 
+			// test with os.File as ReadWriterAt
 			f, err := ioutil.TempFile("", "TestBlock-*")
 			require.NoError(t, err)
 			defer os.Remove(f.Name())
 
-			blk = &block{
-				lower: f,
-				size:  tc.size,
-			}
-
 			for _, op := range tc.ops {
-				op.Do(t, blk)
+				op.Do(t, f)
 			}
 		}
 	}
+
+	var blk, blk2 block
 
 	var tcs = []testcase{
 		{
@@ -141,12 +218,17 @@ func TestBlock(t *testing.T) {
 				blkWriteOp{
 					data: []byte("test"),
 					off:  0,
+
 					expN: 4,
+
+					blkSize: 1 << 10,
 				},
 				blkReadOp{
 					off:  0,
 					exp:  []byte("test"),
 					expN: 4,
+
+					blkSize: 1 << 10,
 				},
 			},
 		},
@@ -158,11 +240,15 @@ func TestBlock(t *testing.T) {
 					data: []byte("testtest"),
 					off:  0,
 					expN: 8,
+
+					blkSize: 1 << 10,
 				},
 				blkReadOp{
 					off:  0,
 					exp:  []byte("test"),
 					expN: 4,
+
+					blkSize: 1 << 10,
 				},
 			},
 		},
@@ -175,6 +261,8 @@ func TestBlock(t *testing.T) {
 					off:    (1 << 10) - 2,
 					expN:   2,
 					expErr: "EOF",
+
+					blkSize: 1 << 10,
 				},
 				blkReadOp{
 					off:    (1 << 10) - 2,
@@ -182,6 +270,8 @@ func TestBlock(t *testing.T) {
 					expErr: "EOF",
 					exp:    []byte("te"),
 					readlen: 4,
+
+					blkSize: 1 << 10,
 				},
 			},
 		},
@@ -194,6 +284,8 @@ func TestBlock(t *testing.T) {
 					off:    (1 << 10) + 2,
 					expN:   0,
 					expErr: "EOF",
+
+					blkSize: 1 << 10,
 				},
 			},
 		},
@@ -205,6 +297,8 @@ func TestBlock(t *testing.T) {
 					data:   []byte("test"),
 					off:    0,
 					expN:   4,
+
+					blkSize: 1 << 10,
 				},
 				blkReadOp{
 					off:    2,
@@ -212,6 +306,8 @@ func TestBlock(t *testing.T) {
 					expErr: "EOF",
 					exp:    []byte("st"),
 					readlen: 4,
+
+					blkSize: 1 << 10,
 				},
 			},
 		},
@@ -223,6 +319,8 @@ func TestBlock(t *testing.T) {
 					data:   bytes.Repeat([]byte("test"), 1<<8),
 					off:    0,
 					expN:   1 << 10,
+
+					blkSize: 1 << 10,
 				},
 				blkReadOp{
 					off:    (1 << 10) - 2,
@@ -230,6 +328,8 @@ func TestBlock(t *testing.T) {
 					expErr: "EOF",
 					exp:    []byte("st"),
 					readlen: 4,
+
+					blkSize: 1 << 10,
 				},
 			},
 		},
@@ -241,6 +341,8 @@ func TestBlock(t *testing.T) {
 					data:   bytes.Repeat([]byte("test"), 1<<8),
 					off:    0,
 					expN:   1 << 10,
+
+					blkSize: 1 << 10,
 				},
 				blkReadOp{
 					off:    (1 << 10) + 2,
@@ -248,6 +350,68 @@ func TestBlock(t *testing.T) {
 					expErr: "EOF",
 					exp:    []byte(""),
 					readlen: 4,
+
+					blkSize: 1 << 10,
+				},
+			},
+		},
+		{
+			name: "new, set then get",
+			ops: []op{
+				blkNewOp{
+					blk: &blk,
+
+					size: 1 << 10,
+				},
+				blkWriteOp{
+					blk: &blk,
+
+					data: []byte("test"),
+					off:  0,
+
+					expN: 4,
+				},
+				blkReadOp{
+					blk: &blk,
+
+					off:  0,
+					exp:  []byte("test"),
+					expN: 4,
+				},
+			},
+		},
+		{
+			name: "new, set, open then get",
+			ops: []op{
+				blkNewOp{
+					blk: &blk,
+
+					size: 1 << 10,
+				},
+				blkWriteOp{
+					blk: &blk,
+
+					data: []byte("test"),
+					off:  0,
+
+					expN: 4,
+				},
+				blkOpenOp{
+					blk: &blk2,
+				},
+				blkReadOp{
+					blk: &blk,
+
+					off:  0,
+					exp:  []byte("test"),
+					expN: 4,
+				},
+				blkReadOp{
+					blk: &blk2,
+
+					off:  0,
+					exp:  []byte("test"),
+					expN: 4,
 				},
 			},
 		},
