@@ -1,2 +1,5 @@
 *.swp
 *.swo
+
+cover.out
+**/cover.out
