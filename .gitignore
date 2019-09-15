@@ -1,5 +1,7 @@
 *.swp
 *.swo
 
+.vscode
+
 cover.out
 **/cover.out
