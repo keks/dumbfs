@@ -1,4 +1,4 @@
-package rwablk
+package blkfile
 
 import (
 	"encoding/binary"
@@ -14,7 +14,7 @@ const BlockHeaderSize = 4
 func openBlock(rwa dumbfs.ReadWriterAt, off int64) (*block, error) {
 	blk := &block{
 		lower: rwa,
-		off: off,
+		off:   off,
 	}
 
 	return blk, blk.parse()
@@ -22,8 +22,8 @@ func openBlock(rwa dumbfs.ReadWriterAt, off int64) (*block, error) {
 func newBlock(rwa dumbfs.ReadWriterAt, off int64, size int) (*block, error) {
 	blk := &block{
 		lower: rwa,
-		off: off,
-		size: size,
+		off:   off,
+		size:  size,
 	}
 
 	return blk, blk.format()
@@ -91,13 +91,15 @@ func (blk *block) WriteAt(data []byte, off int64) (int, error) {
 }
 
 func (blk *block) parse() error {
-	buf := make([]byte, BlockHeaderSize)
-	_, err := blk.lower.ReadAt(buf, blk.off)
+	var size int32
+	err := binary.Read(readerFromReaderAt(blk.lower, blk.off), binary.LittleEndian, &size)
 	if err != nil {
 		return err
 	}
 
-	blk.size = int(binary.LittleEndian.Uint32(buf)) - BlockHeaderSize
+	blk.size = int(size)
+
+	blk.size -= BlockHeaderSize
 	blk.off += BlockHeaderSize
 
 	return nil
