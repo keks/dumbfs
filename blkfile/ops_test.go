@@ -8,8 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// op is an operation performed during the test.
+//
 type op interface {
-	Do(*testing.T, dumbfs.ReadWriterAt)
+	Do(*testing.T, interface{})
+}
+
+func getRWA(t *testing.T, v interface{}) dumbfs.ReadWriterAt {
+	rwa, ok := v.(dumbfs.ReadWriterAt)
+	require.Truef(t, ok, "expected to be of type %T but got %T", rwa, v)
+
+	return rwa
 }
 
 type blksNewOp struct {
@@ -18,7 +27,8 @@ type blksNewOp struct {
 	expErr string
 }
 
-func (op blksNewOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
+func (op blksNewOp) Do(t *testing.T, v interface{}) {
+	rwa := getRWA(t, v)
 	blks, err := New(rwa)
 	if op.expErr == "" {
 		require.NoError(t, err)
@@ -36,7 +46,8 @@ type blksOpenOp struct {
 	expErr string
 }
 
-func (op blksOpenOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
+func (op blksOpenOp) Do(t *testing.T, v interface{}) {
+	rwa := getRWA(t, v)
 	blks, err := Open(rwa)
 	if op.expErr == "" {
 		require.NoError(t, err)
@@ -59,7 +70,7 @@ type blksAllocateOp struct {
 	expErr string
 }
 
-func (op blksAllocateOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
+func (op blksAllocateOp) Do(t *testing.T, v interface{}) {
 	blkid, blk, err := op.blks.Allocate(op.size)
 	if op.expErr == "" {
 		require.NoError(t, err)
@@ -81,7 +92,7 @@ type blksGetOp struct {
 	expErr string
 }
 
-func (op blksGetOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
+func (op blksGetOp) Do(t *testing.T, v interface{}) {
 	t.Logf("blocks get bid=%d", *op.blkid)
 	blk, err := op.blks.Get(*op.blkid)
 	if op.expErr == "" {
@@ -100,7 +111,8 @@ type blkOpenOp struct {
 	expErr string
 }
 
-func (op blkOpenOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
+func (op blkOpenOp) Do(t *testing.T, v interface{}) {
+	rwa := getRWA(t, v)
 	blk, err := openBlock(rwa, int64(op.id))
 	if op.expErr == "" {
 		require.NoError(t, err)
@@ -119,7 +131,8 @@ type blkNewOp struct {
 	expErr string
 }
 
-func (op blkNewOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
+func (op blkNewOp) Do(t *testing.T, v interface{}) {
+	rwa := getRWA(t, v)
 	blk, err := newBlock(rwa, int64(op.id), op.size)
 	if op.expErr == "" {
 		require.NoError(t, err)
@@ -143,8 +156,8 @@ type blkWriteOp struct {
 	expErr string
 }
 
-func (op blkWriteOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
-	r := require.New(t)
+func (op blkWriteOp) Do(t *testing.T, v interface{}) {
+	rwa := getRWA(t, v)
 
 	t.Log("writeOp, op.blk:", op.blk)
 
@@ -162,11 +175,11 @@ func (op blkWriteOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
 
 	t.Logf("writeOp, n: %d, err: %v", n, err)
 
-	r.Equal(op.expN, n)
+	require.Equal(t, op.expN, n)
 	if op.expErr == "" {
-		r.NoError(err)
+		require.NoError(t, err)
 	} else {
-		r.EqualError(err, op.expErr)
+		require.EqualError(t, err, op.expErr)
 	}
 }
 
@@ -184,7 +197,8 @@ type blkReadOp struct {
 	expErr string
 }
 
-func (op blkReadOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
+func (op blkReadOp) Do(t *testing.T, v interface{}) {
+	rwa := getRWA(t, v)
 	r := require.New(t)
 	if op.readlen == 0 {
 		op.readlen = len(op.exp)
@@ -215,13 +229,4 @@ func (op blkReadOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
 	r.Equal(op.expN, n)
 	t.Logf("buffer contents %q | 0x%x", buf[:op.expN], buf[:op.expN])
 	r.True(bytes.Equal(buf[:op.expN], op.exp))
-}
-
-type dumpOp struct {
-	name string
-	v    interface{}
-}
-
-func (op dumpOp) Do(t *testing.T, rwa dumbfs.ReadWriterAt) {
-	t.Logf("%s: %#v", op.name, op.v)
 }

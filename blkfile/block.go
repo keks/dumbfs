@@ -7,6 +7,7 @@ import (
 	"github.com/keks/dumbfs"
 )
 
+// BlockHeaderSize is the size of the header of each block in bytes.
 const BlockHeaderSize = 4
 
 // TODO: maybe export block?
